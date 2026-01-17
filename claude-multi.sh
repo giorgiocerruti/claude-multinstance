@@ -3,8 +3,8 @@ set -e
 
 # === Configurazione ===
 WORKTREE_DIR=".worktrees"
-NUM_PANES=4
-VERSION="1.0.0"
+NUM_PANES=4  # Default, può essere sovrascritto con --parallel
+VERSION="1.1.0"
 
 # === Colori (fallback se gum non disponibile) ===
 RED='\033[0;31m'
@@ -125,11 +125,12 @@ Crea istanze multiple di Claude in worktree Git separati,
 organizzati in una finestra tmux 2x2.
 
 USO:
-  claude-multi [opzioni] [progetto]
+  claude-multi [opzioni]
 
 OPZIONI:
-  (nessuna)              Usa la directory corrente
-  <path>                 Usa il progetto specificato
+  --path <dir>           Path del progetto (default: .)
+  --project <dir>        Alias per --path
+  --parallel <n>         Numero di pane da aprire (default: 4)
   --cleanup, -c          Rimuove worktree e branch temporanei
   --install              Installa lo script globalmente
   --uninstall            Rimuove lo script globale
@@ -137,10 +138,12 @@ OPZIONI:
   --version, -v          Mostra la versione
 
 ESEMPI:
-  claude-multi                    # Usa directory corrente
-  claude-multi ./mio-progetto     # Specifica progetto
-  claude-multi --cleanup          # Cleanup directory corrente
-  claude-multi -c ./progetto      # Cleanup progetto specifico
+  claude-multi                         # Usa directory corrente, 4 pane
+  claude-multi --path ./mio-progetto   # Specifica progetto
+  claude-multi --parallel 6            # Apre 6 pane
+  claude-multi --parallel 2 --path ./p # 2 pane su progetto specifico
+  claude-multi --cleanup               # Cleanup directory corrente
+  claude-multi -c --path ./progetto    # Cleanup progetto specifico
 
 REQUISITI:
   • tmux (devi essere in una sessione tmux)
@@ -164,11 +167,12 @@ Crea istanze multiple di Claude in worktree Git separati,
 organizzati in una finestra tmux 2x2.
 
 USO:
-  claude-multi [opzioni] [progetto]
+  claude-multi [opzioni]
 
 OPZIONI:
-  (nessuna)              Usa la directory corrente
-  <path>                 Usa il progetto specificato
+  --path <dir>           Path del progetto (default: .)
+  --project <dir>        Alias per --path
+  --parallel <n>         Numero di pane da aprire (default: 4)
   --cleanup, -c          Rimuove worktree e branch temporanei
   --install              Installa lo script globalmente
   --uninstall            Rimuove lo script globale
@@ -176,10 +180,12 @@ OPZIONI:
   --version, -v          Mostra la versione
 
 ESEMPI:
-  claude-multi                    # Usa directory corrente
-  claude-multi ./mio-progetto     # Specifica progetto
-  claude-multi --cleanup          # Cleanup directory corrente
-  claude-multi -c ./progetto      # Cleanup progetto specifico
+  claude-multi                         # Usa directory corrente, 4 pane
+  claude-multi --path ./mio-progetto   # Specifica progetto
+  claude-multi --parallel 6            # Apre 6 pane
+  claude-multi --parallel 2 --path ./p # 2 pane su progetto specifico
+  claude-multi --cleanup               # Cleanup directory corrente
+  claude-multi -c --path ./progetto    # Cleanup progetto specifico
 
 REQUISITI:
   • tmux (devi essere in una sessione tmux)
@@ -281,7 +287,7 @@ create_worktrees() {
     success "Tutti i worktree sono pronti!"
 }
 
-# Apre finestra tmux + 4 pane + claude
+# Apre finestra tmux + N pane + claude
 setup_tmux() {
     local project="$1"
     local project_name
@@ -297,27 +303,58 @@ setup_tmux() {
         error "Devi essere all'interno di una sessione tmux"
     fi
 
-    info "Creo finestra '$window_name' con 4 pane..."
+    info "Creo finestra '$window_name' con $NUM_PANES pane..."
     echo ""
 
     # Crea nuova finestra con primo pane
     local wt1="$worktree_base/wt-1"
     tmux new-window -n "$window_name" -c "$wt1"
 
-    # Split per creare layout 2x2
-    tmux split-window -h -c "$worktree_base/wt-2"
-    tmux select-pane -t 0
-    tmux split-window -v -c "$worktree_base/wt-3"
-    tmux select-pane -t 2
-    tmux split-window -v -c "$worktree_base/wt-4"
+    # Calcola layout ottimale (griglia il più quadrata possibile)
+    local cols rows
+    cols=$(echo "sqrt($NUM_PANES)" | bc)
+    rows=$(( (NUM_PANES + cols - 1) / cols ))
+
+    # Se il risultato non è perfetto, aggiusta
+    while (( cols * rows < NUM_PANES )); do
+        ((cols++))
+    done
+
+    # Crea i pane in una griglia
+    local pane_idx=1
+    for ((row=0; row<rows; row++)); do
+        for ((col=0; col<cols; col++)); do
+            if ((pane_idx >= NUM_PANES)); then
+                break
+            fi
+
+            ((pane_idx++))
+            local wt_path="$worktree_base/wt-$pane_idx"
+
+            if ((col == 0 && row > 0)); then
+                # Prima colonna di una nuova riga: split verticale dal pane della riga precedente
+                local target_pane=$(( (row - 1) * cols ))
+                tmux select-pane -t "$window_name.$target_pane"
+                tmux split-window -v -c "$wt_path"
+            elif ((col > 0)); then
+                # Altre colonne: split orizzontale
+                local target_pane=$(( row * cols + col - 1 ))
+                tmux select-pane -t "$window_name.$target_pane"
+                tmux split-window -h -c "$wt_path"
+            fi
+        done
+    done
+
+    # Bilancia i pane per dimensioni uguali
+    tmux select-layout -t "$window_name" tiled
 
     # Avvia claude in ogni pane
-    for i in $(seq 0 3); do
+    for i in $(seq 0 $((NUM_PANES - 1))); do
         tmux send-keys -t "$window_name.$i" "claude" Enter
     done
 
     # Seleziona il primo pane
-    tmux select-pane -t 0
+    tmux select-pane -t "$window_name.0"
 
     echo ""
     success "Finestra tmux pronta!"
@@ -328,10 +365,10 @@ setup_tmux() {
             --border-foreground 46 \
             --padding "0 1" \
             --margin "1 0" \
-            "🎉 4 istanze Claude avviate in $window_name"
+            "🎉 $NUM_PANES istanze Claude avviate in $window_name"
     else
         echo ""
-        echo -e "${GREEN}${BOLD}🎉 4 istanze Claude avviate in $window_name${NC}"
+        echo -e "${GREEN}${BOLD}🎉 $NUM_PANES istanze Claude avviate in $window_name${NC}"
     fi
 }
 
@@ -482,6 +519,23 @@ main() {
                 action="cleanup"
                 shift
                 ;;
+            --parallel)
+                if [[ -z "$2" || "$2" == -* ]]; then
+                    error "--parallel richiede un numero"
+                fi
+                if ! [[ "$2" =~ ^[0-9]+$ ]] || [[ "$2" -lt 1 ]]; then
+                    error "--parallel deve essere un numero positivo"
+                fi
+                NUM_PANES="$2"
+                shift 2
+                ;;
+            --path|--project)
+                if [[ -z "$2" || "$2" == -* ]]; then
+                    error "$1 richiede un path"
+                fi
+                project="$2"
+                shift 2
+                ;;
             --install)
                 install_global
                 exit 0
@@ -494,11 +548,11 @@ main() {
                 error "Opzione sconosciuta: $1\nUsa --help per vedere le opzioni disponibili"
                 ;;
             *)
+                # Per retrocompatibilità, accetta anche path posizionale
                 project="$1"
                 shift
                 ;;
         esac
-        shift 2>/dev/null || true
     done
 
     # Default: usa directory corrente
