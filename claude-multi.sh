@@ -306,50 +306,18 @@ setup_tmux() {
     info "Creo finestra '$window_name' con $NUM_PANES pane..."
     echo ""
 
-    # Crea nuova finestra con primo pane
-    local wt1="$worktree_base/wt-1"
-    tmux new-window -n "$window_name" -c "$wt1"
+    # Crea nuova finestra con primo pane (wt-1)
+    tmux new-window -n "$window_name" -c "$worktree_base/wt-1"
 
-    # Calcola layout ottimale (griglia il più quadrata possibile)
-    local cols rows
-    cols=$(echo "sqrt($NUM_PANES)" | bc)
-    rows=$(( (NUM_PANES + cols - 1) / cols ))
-
-    # Se il risultato non è perfetto, aggiusta
-    while (( cols * rows < NUM_PANES )); do
-        ((cols++))
+    # Crea i pane aggiuntivi con split
+    for ((i=2; i<=NUM_PANES; i++)); do
+        tmux split-window -t "$window_name" -c "$worktree_base/wt-$i"
+        # Ribilancia dopo ogni split per evitare pane troppo piccoli
+        tmux select-layout -t "$window_name" tiled
     done
-
-    # Crea i pane in una griglia
-    local pane_idx=1
-    for ((row=0; row<rows; row++)); do
-        for ((col=0; col<cols; col++)); do
-            if ((pane_idx >= NUM_PANES)); then
-                break
-            fi
-
-            ((pane_idx++))
-            local wt_path="$worktree_base/wt-$pane_idx"
-
-            if ((col == 0 && row > 0)); then
-                # Prima colonna di una nuova riga: split verticale dal pane della riga precedente
-                local target_pane=$(( (row - 1) * cols ))
-                tmux select-pane -t "$window_name.$target_pane"
-                tmux split-window -v -c "$wt_path"
-            elif ((col > 0)); then
-                # Altre colonne: split orizzontale
-                local target_pane=$(( row * cols + col - 1 ))
-                tmux select-pane -t "$window_name.$target_pane"
-                tmux split-window -h -c "$wt_path"
-            fi
-        done
-    done
-
-    # Bilancia i pane per dimensioni uguali
-    tmux select-layout -t "$window_name" tiled
 
     # Avvia claude in ogni pane
-    for i in $(seq 0 $((NUM_PANES - 1))); do
+    for ((i=0; i<NUM_PANES; i++)); do
         tmux send-keys -t "$window_name.$i" "claude" Enter
     done
 
