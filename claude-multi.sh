@@ -4,7 +4,10 @@ set -e
 # === Configurazione ===
 WORKTREE_DIR=".worktrees"
 NUM_PANES=4  # Default, può essere sovrascritto con --parallel
-VERSION="1.1.0"
+VERSION="1.2.0"
+
+# File e directory di Claude Code da copiare nei worktree (se non tracciati da git)
+CLAUDE_FILES=(".claude" "CLAUDE.md" ".claudeignore" ".claude.yaml" ".claude.json")
 
 # === Colori (fallback se gum non disponibile) ===
 RED='\033[0;31m'
@@ -109,6 +112,38 @@ confirm() {
 }
 
 # === Funzioni Principali ===
+
+# Copia file di Claude Code non tracciati da git nel worktree
+copy_claude_files() {
+    local project="$1"
+    local wt_path="$2"
+    local copied=0
+
+    for file in "${CLAUDE_FILES[@]}"; do
+        local source_path="$project/$file"
+        local dest_path="$wt_path/$file"
+
+        # Controlla se il file/directory esiste nel progetto principale
+        if [[ -e "$source_path" ]]; then
+            # Controlla se NON è tracciato da git (quindi non sarà già nel worktree)
+            if ! git -C "$project" ls-files --error-unmatch "$file" &>/dev/null 2>&1; then
+                # Controlla se non esiste già nel worktree
+                if [[ ! -e "$dest_path" ]]; then
+                    if [[ -d "$source_path" ]]; then
+                        cp -r "$source_path" "$dest_path"
+                    else
+                        cp "$source_path" "$dest_path"
+                    fi
+                    ((copied++))
+                fi
+            fi
+        fi
+    done
+
+    if [[ $copied -gt 0 ]]; then
+        info "  Copiati $copied file/directory Claude Code"
+    fi
+}
 
 # Mostra help
 show_help() {
@@ -281,6 +316,9 @@ create_worktrees() {
             git -C "$project" worktree add -b "$branch_name" "$WORKTREE_DIR/wt-$i" HEAD
             success "Worktree wt-$i creato"
         fi
+
+        # Copia file di Claude Code non tracciati da git
+        copy_claude_files "$project" "$wt_path"
     done
 
     echo ""
