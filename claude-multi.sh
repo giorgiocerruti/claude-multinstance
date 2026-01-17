@@ -4,10 +4,24 @@ set -e
 # === Configurazione ===
 WORKTREE_DIR=".worktrees"
 NUM_PANES=4  # Default, può essere sovrascritto con --parallel
-VERSION="1.2.0"
+VERSION="1.5.0"
 
-# File e directory di Claude Code da copiare nei worktree (se non tracciati da git)
-CLAUDE_FILES=(".claude" "CLAUDE.md" ".claudeignore" ".claude.yaml" ".claude.json")
+# Allowed tools (lettura/scrittura, no delete) - usati sempre con --permission-mode plan
+ALLOWED_TOOLS=(
+    "Read" "Edit" "Write" "Grep" "Glob" "Task" "Bash(npm:*)" "Bash(npx:*)" "Bash(node:*)"
+    "Bash(git status:*)" "Bash(git log:*)" "Bash(git diff:*)" "Bash(git add:*)"
+    "Bash(git commit:*)" "Bash(git branch:*)" "Bash(git checkout:*)" "Bash(git pull:*)"
+    "Bash(git push:*)" "Bash(git stash:*)" "Bash(git fetch:*)" "Bash(git merge:*)"
+    "Bash(git rebase:*)" "Bash(git cherry-pick:*)" "Bash(git tag:*)"
+    "Bash(ls:*)" "Bash(cat:*)" "Bash(head:*)" "Bash(tail:*)" "Bash(echo:*)"
+    "Bash(mkdir:*)" "Bash(touch:*)" "Bash(cp:*)" "Bash(mv:*)" "Bash(pwd:*)"
+    "Bash(find:*)" "Bash(grep:*)" "Bash(wc:*)" "Bash(sort:*)" "Bash(uniq:*)"
+    "mcp__*"
+)
+
+# File di Claude Code da copiare nei worktree (se non tracciati da git)
+# Nota: .claude/ è gestita separatamente da copy_claude_internal_files()
+CLAUDE_FILES=("CLAUDE.md" ".claudeignore" ".claude.yaml" ".claude.json")
 
 # === Colori (fallback se gum non disponibile) ===
 RED='\033[0;31m'
@@ -145,6 +159,46 @@ copy_claude_files() {
     fi
 }
 
+# Copia TUTTI i contenuti di .claude/ nel worktree (sovrascrive se esistono)
+# Include: settings.local.json, mcp.json, agents/, skills/, ecc.
+copy_claude_internal_files() {
+    local project="$1"
+    local wt_path="$2"
+    local copied=0
+
+    local claude_dir="$project/.claude"
+    local dest_claude_dir="$wt_path/.claude"
+
+    # Se .claude/ non esiste nel progetto, non c'è nulla da fare
+    [[ -d "$claude_dir" ]] || return 0
+
+    # Crea la directory .claude/ nel worktree se non esiste
+    mkdir -p "$dest_claude_dir"
+
+    # Itera su tutti i file e directory dentro .claude/
+    for item in "$claude_dir"/*; do
+        [[ -e "$item" ]] || continue  # Salta se glob non matcha nulla
+
+        local item_name
+        item_name=$(basename "$item")
+        local dest_path="$dest_claude_dir/$item_name"
+
+        # Copia sempre (sovrascrive se esiste)
+        if [[ -d "$item" ]]; then
+            # Per directory: rimuovi destinazione e copia
+            rm -rf "$dest_path"
+            cp -r "$item" "$dest_path"
+        else
+            cp -f "$item" "$dest_path"
+        fi
+        ((copied++))
+    done
+
+    if [[ $copied -gt 0 ]]; then
+        info "  Copiati $copied elementi da .claude/"
+    fi
+}
+
 # Mostra help
 show_help() {
     if has_gum; then
@@ -171,6 +225,10 @@ OPZIONI:
   --uninstall            Rimuove lo script globale
   --help, -h             Mostra questo messaggio
   --version, -v          Mostra la versione
+
+NOTE:
+  Claude viene avviato con --permission-mode plan e allowedTools
+  pre-configurati (git, read/write, MCP, skills - no delete)
 
 ESEMPI:
   claude-multi                         # Usa directory corrente, 4 pane
@@ -213,6 +271,10 @@ OPZIONI:
   --uninstall            Rimuove lo script globale
   --help, -h             Mostra questo messaggio
   --version, -v          Mostra la versione
+
+NOTE:
+  Claude viene avviato con --permission-mode plan e allowedTools
+  pre-configurati (git, read/write, MCP, skills - no delete)
 
 ESEMPI:
   claude-multi                         # Usa directory corrente, 4 pane
@@ -319,6 +381,9 @@ create_worktrees() {
 
         # Copia file di Claude Code non tracciati da git
         copy_claude_files "$project" "$wt_path"
+
+        # Copia file interni a .claude/ non tracciati (MCP, settings)
+        copy_claude_internal_files "$project" "$wt_path"
     done
 
     echo ""
@@ -354,9 +419,16 @@ setup_tmux() {
         tmux select-layout -t "$window_name" tiled
     done
 
+    # Costruisci comando claude con permission-mode plan e allowedTools
+    local tools_str=""
+    for tool in "${ALLOWED_TOOLS[@]}"; do
+        tools_str+="\"$tool\" "
+    done
+    local claude_cmd="claude --permission-mode plan --allowedTools $tools_str"
+
     # Avvia claude in ogni pane
     for ((i=0; i<NUM_PANES; i++)); do
-        tmux send-keys -t "$window_name.$i" "claude" Enter
+        tmux send-keys -t "$window_name.$i" "$claude_cmd" Enter
     done
 
     # Seleziona il primo pane
